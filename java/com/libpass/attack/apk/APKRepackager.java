@@ -14,6 +14,7 @@ import com.libpass.attack.util.Logger;
  * 将修改后的Jimple代码转换为DEX并重新打包为APK
  */
 public class APKRepackager {
+    private boolean signAPK = true; // 默认签名APK
     private String jimpleDir;
     private String outputApkPath;
     private String androidJarPath;
@@ -26,6 +27,13 @@ public class APKRepackager {
         this.androidJarPath = androidJarPath;
         this.originalApkPath = originalApkPath;
         this.scene = Scene.v(); // 保存当前Scene引用
+    }
+    
+    /**
+     * 设置是否签名APK
+     */
+    public void setSignAPK(boolean signAPK) {
+        this.signAPK = signAPK;
     }
     
     /**
@@ -49,7 +57,15 @@ public class APKRepackager {
             Logger.debug("Repackaging APK...");
             packageAPK(dexPath, resourcesDir, outputApkPath);
             
-            // 5. 签名APK（可选）
+            // 5. 签名APK
+            if (signAPK) {
+                Logger.debug("Signing APK...");
+                if (!signAPK(outputApkPath)) {
+                    Logger.warning("APK repackaged but signing failed: %s", outputApkPath);
+                    Logger.warning("You may need to sign it manually before installation");
+                }
+            }
+            
             Logger.debug("APK repackaged successfully: %s", outputApkPath);
             
             return true;
@@ -114,6 +130,15 @@ public class APKRepackager {
             } else {
                 // 多个DEX文件，需要全部打包
                 packageAPKWithMultipleDex(jimpleDir, resourcesDir, outputApkPath);
+            }
+            
+            // 4. 签名APK
+            if (signAPK) {
+                Logger.debug("Signing APK...");
+                if (!signAPK(outputApkPath)) {
+                    Logger.warning("APK repackaged but signing failed: %s", outputApkPath);
+                    Logger.warning("You may need to sign it manually before installation");
+                }
             }
             
             Logger.debug("APK repackaged successfully: %s", outputApkPath);
@@ -517,6 +542,25 @@ public class APKRepackager {
                     addFileToZip(zos, file, path);
                 }
             }
+        }
+    }
+    
+    /**
+     * 签名APK
+     */
+    private boolean signAPK(String apkPath) {
+        try {
+            // 确保调试密钥存在
+            if (!APKSigner.createDebugKeystoreIfNeeded()) {
+                Logger.warning("Failed to create debug keystore, signing may fail");
+            }
+            
+            // 使用默认调试密钥签名
+            APKSigner signer = new APKSigner();
+            return signer.signAPK(apkPath);
+        } catch (Exception e) {
+            Logger.error("Failed to sign APK: %s", e.getMessage(), e);
+            return false;
         }
     }
 }

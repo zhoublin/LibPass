@@ -27,6 +27,68 @@ public class MergingPerturbation {
     // 约束矩阵：记录哪些节点可以合并
     private Map<String, Set<String>> mergeConstraints;
     
+    // 受保护的类列表：这些类不应该被合并，以避免破坏关键功能
+    // 主要包括Android Support库类和其他关键系统类
+    private static final Set<String> PROTECTED_CLASSES = new HashSet<>(Arrays.asList(
+        "android.support.v4.app.BaseFragmentActivityDonut",
+        "android.support.v4.app.FragmentActivity",
+        "android.support.v4.app.Fragment",
+        "android.support.v4.app.SupportActivity",
+        "android.support.v4.app.ComponentActivity",
+        "androidx.fragment.app.FragmentActivity",
+        "androidx.fragment.app.Fragment",
+        "androidx.appcompat.app.AppCompatActivity",
+        // 可以添加其他需要保护的类
+        "android.app.Activity",
+        "android.app.Application"
+    ));
+    
+    /**
+     * 检查类是否受保护（包括包名前缀匹配）
+     * 这样可以保护整个包下的所有类，包括内部类
+     */
+    private static boolean isProtectedClass(String className) {
+        if (className == null) {
+            return false;
+        }
+        
+        // 精确匹配
+        if (PROTECTED_CLASSES.contains(className)) {
+            return true;
+        }
+        
+        // 包名前缀匹配：保护整个android.support.v4.app包下的类
+        // 这样可以保护所有相关的Support库类，包括内部类
+        if (className.startsWith("android.support.v4.app.") ||
+            className.startsWith("androidx.fragment.app.") ||
+            className.startsWith("androidx.appcompat.app.")) {
+            return true;
+        }
+        
+        // 保护android.app包下的关键类
+        if (className.startsWith("android.app.Activity") ||
+            className.startsWith("android.app.Application")) {
+            return true;
+        }
+        
+        // 保护所有应用自定义的Activity类（不以android.开头的Activity类）
+        // Activity是Android应用的核心组件，不应该被合并以避免破坏应用功能
+        if (className.endsWith("Activity") && !className.startsWith("android.")) {
+            return true;
+        }
+        
+        // 保护所有接口类（interface）
+        // 接口字段必须是public final static，接口方法有特殊约束，不应该被修改
+        // 由于这是静态方法，无法访问scene，我们通过包名前缀匹配来保护接口
+        // 保护所有android.support.annotation和androidx.annotation包下的类（它们大多是接口）
+        if (className.startsWith("android.support.annotation.") ||
+            className.startsWith("androidx.annotation.")) {
+            return true;
+        }
+        
+        return false;
+    }
+    
     public MergingPerturbation(Scene scene) {
         this(scene, null);
     }
@@ -89,10 +151,19 @@ public class MergingPerturbation {
         List<Map.Entry<String, Double>> sortedClasses = new ArrayList<>(classEntropies.entrySet());
         sortedClasses.sort(Map.Entry.comparingByValue());
         
-        // 选择top-k作为源类
+        // 选择top-k作为源类（排除受保护的类）
         List<String> sourceClasses = new ArrayList<>();
-        for (int i = 0; i < Math.min(k, sortedClasses.size()); i++) {
-            sourceClasses.add(sortedClasses.get(i).getKey());
+        for (int i = 0; i < sortedClasses.size() && sourceClasses.size() < k; i++) {
+            String classId = sortedClasses.get(i).getKey();
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    Logger.debug("Skipping protected class as source: " + className);
+                    continue;
+                }
+            }
+            sourceClasses.add(classId);
         }
         
         // 随机选择目标类
@@ -102,6 +173,26 @@ public class MergingPerturbation {
         
         while (targetClasses.size() < k && !allClasses.isEmpty()) {
             String target = allClasses.remove(random.nextInt(allClasses.size()));
+            
+            // 检查源类和目标类是否受保护
+            String sourceClassId = sourceClasses.get(targetClasses.size());
+            GraphNode sourceNode = graph.getNode(sourceClassId);
+            GraphNode targetNode = graph.getNode(target);
+            
+            if (sourceNode != null && targetNode != null) {
+                String sourceClassName = (String) sourceNode.getAttribute("name");
+                String targetClassName = (String) targetNode.getAttribute("name");
+                
+                if (sourceClassName != null && isProtectedClass(sourceClassName)) {
+                    Logger.debug("Skipping merge: source class is protected: " + sourceClassName);
+                    continue;
+                }
+                if (targetClassName != null && isProtectedClass(targetClassName)) {
+                    Logger.debug("Skipping merge: target class is protected: " + targetClassName);
+                    continue;
+                }
+            }
+            
             if (canMergeClasses(sourceClasses.get(targetClasses.size()), target, graph)) {
                 targetClasses.add(target);
             }
@@ -129,6 +220,17 @@ public class MergingPerturbation {
         List<String> sourceMethods = new ArrayList<>();
         for (int i = 0; i < Math.min(k, sortedClasses.size()); i++) {
             String classId = sortedClasses.get(i).getKey();
+            
+            // 检查类是否受保护
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    Logger.debug("Skipping method selection from protected class: " + className);
+                    continue;
+                }
+            }
+            
             Set<String> methodIds = graph.getNeighbors(classId, 
                 HeterogeneousGraph.EdgeType.CLASS_CONTAINS_METHOD);
             if (!methodIds.isEmpty()) {
@@ -145,6 +247,13 @@ public class MergingPerturbation {
         while (targetMethods.size() < sourceMethods.size() && !allMethodIds.isEmpty()) {
             List<String> available = new ArrayList<>(allMethodIds);
             String target = available.get(random.nextInt(available.size()));
+            
+            // 检查目标方法是否属于受保护类
+            if (isMethodFromProtectedClass(target, graph)) {
+                allMethodIds.remove(target);
+                continue;
+            }
+            
             if (canMergeMethods(sourceMethods.get(targetMethods.size()), target, graph)) {
                 targetMethods.add(target);
                 allMethodIds.remove(target);
@@ -153,6 +262,12 @@ public class MergingPerturbation {
         
         // 执行合并
         for (int i = 0; i < Math.min(sourceMethods.size(), targetMethods.size()); i++) {
+            // 再次检查方法是否属于受保护类
+            if (isMethodFromProtectedClass(sourceMethods.get(i), graph) ||
+                isMethodFromProtectedClass(targetMethods.get(i), graph)) {
+                Logger.debug("Skipping method merge for protected class methods");
+                continue;
+            }
             mergeMethodPair(graph, sourceMethods.get(i), targetMethods.get(i), tplClasses);
         }
     }
@@ -170,6 +285,17 @@ public class MergingPerturbation {
         List<String> sourceFields = new ArrayList<>();
         for (int i = 0; i < Math.min(k, sortedClasses.size()); i++) {
             String classId = sortedClasses.get(i).getKey();
+            
+            // 检查类是否受保护
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    Logger.debug("Skipping field selection from protected class: " + className);
+                    continue;
+                }
+            }
+            
             Set<String> fieldIds = graph.getNeighbors(classId, 
                 HeterogeneousGraph.EdgeType.CLASS_CONTAINS_FIELD);
             if (!fieldIds.isEmpty()) {
@@ -186,6 +312,13 @@ public class MergingPerturbation {
         while (targetFields.size() < sourceFields.size() && !allFieldIds.isEmpty()) {
             List<String> available = new ArrayList<>(allFieldIds);
             String target = available.get(random.nextInt(available.size()));
+            
+            // 检查目标字段是否属于受保护类
+            if (isFieldFromProtectedClass(target, graph)) {
+                allFieldIds.remove(target);
+                continue;
+            }
+            
             if (canMergeFields(sourceFields.get(targetFields.size()), target, graph)) {
                 targetFields.add(target);
                 allFieldIds.remove(target);
@@ -194,6 +327,12 @@ public class MergingPerturbation {
         
         // 执行合并
         for (int i = 0; i < Math.min(sourceFields.size(), targetFields.size()); i++) {
+            // 再次检查字段是否属于受保护类
+            if (isFieldFromProtectedClass(sourceFields.get(i), graph) ||
+                isFieldFromProtectedClass(targetFields.get(i), graph)) {
+                Logger.debug("Skipping field merge for protected class fields");
+                continue;
+            }
             mergeFieldPair(graph, sourceFields.get(i), targetFields.get(i), tplClasses);
         }
     }
@@ -211,10 +350,26 @@ public class MergingPerturbation {
         List<String> methodsWithParams = new ArrayList<>();
         for (int i = 0; i < Math.min(k * 2, sortedClasses.size()) && methodsWithParams.size() < k; i++) {
             String classId = sortedClasses.get(i).getKey();
+            
+            // 检查类是否受保护
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    Logger.debug("Skipping parameter selection from protected class: " + className);
+                    continue;
+                }
+            }
+            
             Set<String> methodIds = graph.getNeighbors(classId, 
                 HeterogeneousGraph.EdgeType.CLASS_CONTAINS_METHOD);
             
             for (String methodId : methodIds) {
+                // 检查方法是否属于受保护类
+                if (isMethodFromProtectedClass(methodId, graph)) {
+                    continue;
+                }
+                
                 Set<String> paramIds = graph.getNeighbors(methodId, 
                     HeterogeneousGraph.EdgeType.METHOD_CONTAINS_PARAMETER);
                 if (paramIds.size() >= 2) {
@@ -226,6 +381,11 @@ public class MergingPerturbation {
         
         // 为每个方法合并两个参数
         for (String methodId : methodsWithParams) {
+            // 再次检查方法是否属于受保护类
+            if (isMethodFromProtectedClass(methodId, graph)) {
+                Logger.debug("Skipping parameter merge for protected class method");
+                continue;
+            }
             Set<String> paramIds = graph.getNeighbors(methodId, 
                 HeterogeneousGraph.EdgeType.METHOD_CONTAINS_PARAMETER);
             if (paramIds.size() >= 2) {
@@ -263,6 +423,12 @@ public class MergingPerturbation {
             
             String className = (String) classNode.getAttribute("name");
             if (className == null) continue;
+            
+            // 检查是否是受保护的类，如果是则跳过包合并（使用包名前缀匹配）
+            if (isProtectedClass(className)) {
+                Logger.debug("Skipping package merge for protected class: " + className);
+                continue;
+            }
             
             // 检查名称冲突
             String targetPkgName = (String) targetPkg.getAttribute("name");
@@ -334,12 +500,31 @@ public class MergingPerturbation {
             return;
         }
         
+        // 检查是否是受保护的类（使用更全面的检查，包括包名前缀匹配）
+        if (isProtectedClass(sourceClassName) || 
+            isProtectedClass(targetClassName)) {
+            Logger.warning("Skipping merge of protected class to avoid breaking critical functionality. " +
+                       "Source: " + sourceClassName + ", Target: " + targetClassName);
+            return;
+        }
+        
         SootClass sourceSootClass = scene.getSootClass(sourceClassName);
         SootClass targetSootClass = scene.getSootClass(targetClassName);
         
         if (sourceSootClass == null || targetSootClass == null || 
             sourceSootClass.isPhantom() || targetSootClass.isPhantom()) {
             return;
+        }
+        
+        // 检查静态初始化器兼容性
+        SootMethod targetClinit = findStaticInitializer(targetSootClass);
+        if (targetClinit != null) {
+            // 如果目标类有静态初始化器，检查合并是否会破坏它
+            if (wouldMergeBreakStaticInit(sourceSootClass, targetSootClass)) {
+                Logger.warning("Skipping merge of class with static initializer to avoid breaking it. " +
+                           "Source: " + sourceClassName + ", Target: " + targetClassName);
+                return;
+            }
         }
         
         // 记录合并前的状态
@@ -407,10 +592,29 @@ public class MergingPerturbation {
             return;
         }
         
+        // 检查方法是否属于受保护类
+        if (isMethodFromProtectedClass(sourceMethodId, graph) ||
+            isMethodFromProtectedClass(targetMethodId, graph)) {
+            Logger.debug("Skipping method merge for protected class methods");
+            return;
+        }
+        
         String sourceSignature = (String) sourceMethod.getAttribute("signature");
         String targetSignature = (String) targetMethod.getAttribute("signature");
         
         if (sourceSignature == null || targetSignature == null) {
+            return;
+        }
+        
+        // 从方法签名中提取类名，再次检查
+        String sourceClassName = extractClassNameFromSignature(sourceSignature);
+        String targetClassName = extractClassNameFromSignature(targetSignature);
+        if (sourceClassName != null && isProtectedClass(sourceClassName)) {
+            Logger.debug("Skipping method merge: source method belongs to protected class: " + sourceClassName);
+            return;
+        }
+        if (targetClassName != null && isProtectedClass(targetClassName)) {
+            Logger.debug("Skipping method merge: target method belongs to protected class: " + targetClassName);
             return;
         }
         
@@ -438,6 +642,20 @@ public class MergingPerturbation {
         GraphNode targetFieldNode = graph.getNode(targetFieldId);
         
         if (sourceFieldNode == null || targetFieldNode == null) {
+            return;
+        }
+        
+        // 检查字段是否属于受保护类
+        if (isFieldFromProtectedClass(sourceFieldId, graph) ||
+            isFieldFromProtectedClass(targetFieldId, graph)) {
+            Logger.debug("Skipping field merge for protected class fields");
+            return;
+        }
+        
+        // 检查字段是否属于接口类
+        if (isFieldFromInterface(sourceFieldId, graph) ||
+            isFieldFromInterface(targetFieldId, graph)) {
+            Logger.debug("Skipping field merge for interface fields (interfaces must have public final static fields)");
             return;
         }
         
@@ -1247,6 +1465,13 @@ public class MergingPerturbation {
             return false;
         }
         
+        // 检查是否是受保护的类（在合并检查阶段就排除，使用包名前缀匹配）
+        if (isProtectedClass(sourceClassName) || 
+            isProtectedClass(targetClassName)) {
+            Logger.debug("Cannot merge protected classes: " + sourceClassName + " <-> " + targetClassName);
+            return false;
+        }
+        
         try {
             SootClass sourceClass = scene.getSootClass(sourceClassName);
             SootClass targetClass = scene.getSootClass(targetClassName);
@@ -1371,6 +1596,13 @@ public class MergingPerturbation {
      */
     private Map<String, String> mergeClassFields(SootClass source, SootClass target, 
                                  HeterogeneousGraph graph, String sourceId, String targetId) {
+        // 双重检查：确保源类和目标类都不是受保护类
+        if (isProtectedClass(source.getName()) || isProtectedClass(target.getName())) {
+            Logger.warning("Skipping field merge for protected classes. " +
+                       "Source: " + source.getName() + ", Target: " + target.getName());
+            return new HashMap<>();
+        }
+        
         Map<String, String> renamedFields = new HashMap<>();
         Set<String> targetFieldNames = new HashSet<>();
         for (SootField field : target.getFields()) {
@@ -1416,6 +1648,13 @@ public class MergingPerturbation {
      */
     private Map<String, String> mergeClassMethods(SootClass source, SootClass target, 
                                   HeterogeneousGraph graph, String sourceId, String targetId) {
+        // 双重检查：确保源类和目标类都不是受保护类
+        if (isProtectedClass(source.getName()) || isProtectedClass(target.getName())) {
+            Logger.warning("Skipping method merge for protected classes. " +
+                       "Source: " + source.getName() + ", Target: " + target.getName());
+            return new HashMap<>();
+        }
+        
         Map<String, String> renamedMethods = new HashMap<>();
         Set<String> targetMethodSigs = new HashSet<>();
         for (SootMethod method : target.getMethods()) {
@@ -1424,11 +1663,29 @@ public class MergingPerturbation {
             }
         }
         
+        // 检查静态初始化器
+        SootMethod sourceClinit = findStaticInitializer(source);
+        SootMethod targetClinit = findStaticInitializer(target);
+        
+        // 如果目标类有静态初始化器，且源类也有，跳过合并以避免破坏静态初始化器
+        if (targetClinit != null && sourceClinit != null) {
+            Logger.warning("Both source and target classes have static initializers. " +
+                       "Skipping method merge to avoid potential issues. " +
+                       "Source: " + source.getName() + ", Target: " + target.getName());
+            return renamedMethods;
+        }
+        
         // 迁移源类的方法到目标类
         List<SootMethod> methodsToMove = new ArrayList<>(source.getMethods());
         for (SootMethod sourceMethod : methodsToMove) {
             if (sourceMethod.isConstructor()) {
                 continue; // 构造函数单独处理
+            }
+            
+            // 跳过静态初始化器（单独处理，避免破坏）
+            if (sourceMethod.getName().equals("<clinit>")) {
+                Logger.debug("Skipping static initializer during method merge: " + sourceMethod.getSignature());
+                continue;
             }
             
             String methodSig = sourceMethod.getSubSignature();
@@ -1467,6 +1724,13 @@ public class MergingPerturbation {
      */
     private void mergeClassConstructors(SootClass source, SootClass target, 
                                        HeterogeneousGraph graph, String sourceId, String targetId) {
+        // 双重检查：确保源类和目标类都不是受保护类
+        if (isProtectedClass(source.getName()) || isProtectedClass(target.getName())) {
+            Logger.warning("Skipping constructor merge for protected classes. " +
+                       "Source: " + source.getName() + ", Target: " + target.getName());
+            return;
+        }
+        
         // 找到所有构造函数
         List<SootMethod> sourceConstructors = new ArrayList<>();
         List<SootMethod> targetConstructors = new ArrayList<>();
@@ -1677,9 +1941,22 @@ public class MergingPerturbation {
      */
     private void updateFieldReferences(String oldClassName, String oldFieldName, 
                                      String newClassName, String newFieldName) {
+        // 如果涉及受保护类，跳过更新
+        if (isProtectedClass(oldClassName) || isProtectedClass(newClassName)) {
+            Logger.debug("Skipping field reference update for protected classes: " + 
+                        oldClassName + " -> " + newClassName);
+            return;
+        }
+        
         // 遍历所有类，更新字段访问
         for (SootClass sc : scene.getClasses()) {
             if (sc.isPhantom() || sc.getMethodCount() == 0) {
+                continue;
+            }
+            
+            // 跳过受保护类，不更新其方法中的引用
+            if (isProtectedClass(sc.getName())) {
+                Logger.debug("Skipping field reference update in protected class: " + sc.getName());
                 continue;
             }
             
@@ -1758,9 +2035,23 @@ public class MergingPerturbation {
      * 更新类引用
      */
     private void updateClassReferences(String oldClassName, String newClassName) {
+        // 如果涉及受保护类，跳过更新以避免破坏关键功能（使用包名前缀匹配）
+        if (isProtectedClass(oldClassName) || 
+            isProtectedClass(newClassName)) {
+            Logger.debug("Skipping class reference update for protected classes: " + 
+                        oldClassName + " -> " + newClassName);
+            return;
+        }
+        
         // 遍历所有类，更新类型引用
         for (SootClass sc : scene.getClasses()) {
             if (sc.isPhantom() || sc.getMethodCount() == 0) {
+                continue;
+            }
+            
+            // 跳过受保护类，不更新其方法中的引用（使用包名前缀匹配）
+            if (isProtectedClass(sc.getName())) {
+                Logger.debug("Skipping class reference update in protected class: " + sc.getName());
                 continue;
             }
             
@@ -1777,6 +2068,33 @@ public class MergingPerturbation {
                     // 更新所有使用oldClassName的地方
                     for (ValueBox valueBox : unit.getUseBoxes()) {
                         Value value = valueBox.getValue();
+                        
+                        // 处理类字面量（ClassConstant）- 这在静态初始化器中很常见
+                        if (value instanceof ClassConstant) {
+                            ClassConstant classConst = (ClassConstant) value;
+                            String className = classConst.getValue();
+                            if (className.equals(oldClassName)) {
+                                // 创建新的类字面量
+                                try {
+                                    if (scene.containsClass(newClassName)) {
+                                        SootClass newClass = scene.getSootClass(newClassName);
+                                        if (newClass != null) {
+                                            // 在Soot中，ClassConstant的创建方式因版本而异
+                                            // 为了兼容性和稳定性，我们暂时跳过ClassConstant的自动更新
+                                            // 这不会阻止其他引用更新，静态初始化器可能需要手动检查
+                                            // 注意：ClassConstant的更新可能需要使用特定Soot版本的API
+                                            Logger.debug("ClassConstant update skipped for compatibility: " + 
+                                                        oldClassName + " -> " + newClassName +
+                                                        ". This is a known limitation and may not affect functionality.");
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    Logger.warning("Failed to update ClassConstant: " + e.getMessage() + 
+                                              ". This may cause issues in static initializers.");
+                                }
+                            }
+                        }
+                        
                         if (value instanceof RefType) {
                             RefType refType = (RefType) value;
                             if (refType.getClassName().equals(oldClassName)) {
@@ -1818,6 +2136,14 @@ public class MergingPerturbation {
      */
     private void updateSootClassPackage(String oldClassName, String newClassName) {
         try {
+            // 检查是否是受保护的类（使用包名前缀匹配）
+            if (isProtectedClass(oldClassName) || 
+                isProtectedClass(newClassName)) {
+                Logger.debug("Skipping package update for protected class: " + 
+                            oldClassName + " -> " + newClassName);
+                return;
+            }
+            
             SootClass oldClass = scene.getSootClass(oldClassName);
             if (oldClass == null || oldClass.isPhantom()) {
                 return;
@@ -1831,6 +2157,187 @@ public class MergingPerturbation {
             updateClassReferences(oldClassName, newClassName);
         } catch (Exception e) {
             System.err.println("Failed to update class package: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 查找静态初始化器
+     */
+    private SootMethod findStaticInitializer(SootClass sootClass) {
+        if (sootClass == null) {
+            return null;
+        }
+        for (SootMethod method : sootClass.getMethods()) {
+            if (method.getName().equals("<clinit>")) {
+                return method;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 检查合并是否会破坏静态初始化器
+     */
+    private boolean wouldMergeBreakStaticInit(SootClass source, SootClass target) {
+        SootMethod targetClinit = findStaticInitializer(target);
+        if (targetClinit == null || !targetClinit.hasActiveBody()) {
+            return false;
+        }
+        
+        // 检查源类的方法是否被目标类的静态初始化器调用
+        try {
+            JimpleBody clinitBody = (JimpleBody) targetClinit.getActiveBody();
+            for (Unit unit : clinitBody.getUnits()) {
+                InvokeExpr invoke = null;
+                if (unit instanceof InvokeStmt) {
+                    invoke = ((InvokeStmt) unit).getInvokeExpr();
+                } else if (unit instanceof AssignStmt) {
+                    Value rightOp = ((AssignStmt) unit).getRightOp();
+                    if (rightOp instanceof InvokeExpr) {
+                        invoke = (InvokeExpr) rightOp;
+                    }
+                }
+                
+                if (invoke != null) {
+                    SootMethod calledMethod = invoke.getMethod();
+                    // 如果调用的方法属于源类，合并可能会破坏静态初始化器
+                    if (calledMethod.getDeclaringClass().equals(source)) {
+                        Logger.warning("Static initializer in target class calls method from source class: " +
+                                   calledMethod.getSignature());
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Logger.warning("Error checking static initializer compatibility: " + e.getMessage());
+            // 如果检查失败，为了安全起见，返回true（不合并）
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 检查方法是否属于受保护类
+     */
+    private boolean isMethodFromProtectedClass(String methodId, HeterogeneousGraph graph) {
+        GraphNode methodNode = graph.getNode(methodId);
+        if (methodNode == null) {
+            return false;
+        }
+        
+        // 查找方法所属的类
+        Set<String> parentClasses = graph.getNeighbors(methodId, 
+            HeterogeneousGraph.EdgeType.CLASS_CONTAINS_METHOD);
+        for (String classId : parentClasses) {
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    return true;
+                }
+            }
+        }
+        
+        // 也可以从方法签名中提取类名
+        String signature = (String) methodNode.getAttribute("signature");
+        if (signature != null) {
+            String className = extractClassNameFromSignature(signature);
+            if (className != null && isProtectedClass(className)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 检查字段是否属于受保护类
+     */
+    private boolean isFieldFromProtectedClass(String fieldId, HeterogeneousGraph graph) {
+        GraphNode fieldNode = graph.getNode(fieldId);
+        if (fieldNode == null) {
+            return false;
+        }
+        
+        // 查找字段所属的类
+        Set<String> parentClasses = graph.getNeighbors(fieldId, 
+            HeterogeneousGraph.EdgeType.CLASS_CONTAINS_FIELD);
+        for (String classId : parentClasses) {
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null && isProtectedClass(className)) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 检查字段是否属于接口类
+     */
+    private boolean isFieldFromInterface(String fieldId, HeterogeneousGraph graph) {
+        GraphNode fieldNode = graph.getNode(fieldId);
+        if (fieldNode == null) {
+            return false;
+        }
+        
+        // 查找字段所属的类
+        Set<String> parentClasses = graph.getNeighbors(fieldId, 
+            HeterogeneousGraph.EdgeType.CLASS_CONTAINS_FIELD);
+        for (String classId : parentClasses) {
+            GraphNode classNode = graph.getNode(classId);
+            if (classNode != null) {
+                String className = (String) classNode.getAttribute("name");
+                if (className != null) {
+                    try {
+                        SootClass sootClass = scene.getSootClass(className);
+                        if (sootClass != null && sootClass.isInterface()) {
+                            return true;
+                        }
+                    } catch (Exception e) {
+                        // 如果无法获取SootClass，通过类名判断
+                        if (className.startsWith("android.support.annotation.") ||
+                            className.startsWith("androidx.annotation.")) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 从方法签名中提取类名
+     * 签名格式通常为: "class.name methodName(paramTypes)returnType"
+     */
+    private String extractClassNameFromSignature(String signature) {
+        if (signature == null) {
+            return null;
+        }
+        
+        try {
+            // 找到方法名前的最后一个点
+            int parenIndex = signature.indexOf('(');
+            if (parenIndex < 0) {
+                return null;
+            }
+            
+            String methodPart = signature.substring(0, parenIndex);
+            int lastDot = methodPart.lastIndexOf('.');
+            if (lastDot < 0) {
+                return null;
+            }
+            
+            return methodPart.substring(0, lastDot);
+        } catch (Exception e) {
+            Logger.debug("Failed to extract class name from signature: " + signature);
+            return null;
         }
     }
     
