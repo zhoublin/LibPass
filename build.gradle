@@ -1,0 +1,126 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.libpass.attack'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    google()
+    // 添加本地文件系统仓库，用于第三方Soot包
+    flatDir {
+        dirs 'ThirdParty'
+    }
+}
+
+// 配置依赖解析策略，强制使用支持Java 21的ASM版本
+configurations.all {
+    resolutionStrategy {
+        force 'org.ow2.asm:asm:9.6'
+        force 'org.ow2.asm:asm-commons:9.6'
+        force 'org.ow2.asm:asm-tree:9.6'
+        force 'org.ow2.asm:asm-util:9.6'
+        force 'org.ow2.asm:asm-analysis:9.6'
+    }
+}
+
+dependencies {
+    // Soot framework - 使用ThirdParty目录下的本地JAR文件
+    // 优先使用本地JAR，如果不存在则回退到Maven仓库
+    if (file('ThirdParty/soot-4.5.0-20230320.123751-11-jar-with-dependencies.jar').exists()) {
+        // 添加支持Java 21的ASM版本
+        // ASM 9.5+ 支持 Java 21 (class file major version 65)
+        implementation 'org.ow2.asm:asm:9.6'
+        implementation 'org.ow2.asm:asm-commons:9.6'
+        implementation 'org.ow2.asm:asm-tree:9.6'
+        implementation 'org.ow2.asm:asm-util:9.6'
+        implementation 'org.ow2.asm:asm-analysis:9.6'
+        
+        // 添加Soot JAR，resolutionStrategy会强制使用上面的ASM版本
+        implementation files('ThirdParty/soot-4.5.0-20230320.123751-11-jar-with-dependencies.jar')
+        
+        println "Using local Soot JAR from ThirdParty directory"
+        println "Upgraded ASM to 9.6 for Java 21 support (class file major version 65)"
+    } else {
+        implementation 'org.soot-oss:soot:4.5.0'
+        println "Using Soot from Maven repository"
+    }
+    
+    // Android analysis tools
+    implementation 'com.google.guava:guava:32.1.2-jre'
+    
+    // JSON processing
+    implementation 'com.google.code.gson:gson:2.10.1'
+    
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'org.slf4j:slf4j-simple:2.0.9'
+    
+    // Apache Commons
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    implementation 'commons-io:commons-io:2.15.1'
+    
+    // Testing
+    testImplementation 'junit:junit:4.13.2'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+// 指定源代码目录
+sourceSets {
+    main {
+        java {
+            srcDirs = ['java']
+        }
+        resources {
+            srcDirs = ['resources']
+        }
+    }
+    test {
+        java {
+            srcDirs = ['test']
+        }
+    }
+}
+
+application {
+    mainClass = 'com.libpass.attack.AutomatedAttackMain'
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+// 确保JAR包含所有依赖
+jar {
+    manifest {
+        attributes 'Main-Class': 'com.libpass.attack.AutomatedAttackMain'
+    }
+    
+    // 分两步打包，确保ASM 9.6覆盖Soot JAR中的旧版本
+    // 第一步：包含所有依赖，但排除ASM类
+    from(configurations.runtimeClasspath.collect { 
+        if (it.isDirectory()) {
+            return it
+        } else {
+            return zipTree(it).matching { 
+                exclude 'org/objectweb/asm/**' 
+            }
+        }
+    }) {
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
+    
+    // 第二步：显式包含ASM 9.6的类（这会覆盖任何残留的旧版本）
+    from(configurations.runtimeClasspath.filter { 
+        it.name.startsWith('asm') && it.name.contains('9.6')
+    }.collect { zipTree(it) }) {
+        include 'org/objectweb/asm/**'
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE  // 强制包含，覆盖旧版本
+    }
+}
