@@ -330,23 +330,18 @@ public class AutomatedAttackEngine {
         batchResult.setTplName(tplName);
         batchResult.setTotalApks(apkPaths.size());
         
-        List<AutomatedAttackResult> results = new ArrayList<>();
-        
         for (int i = 0; i < apkPaths.size(); i++) {
             String apkPath = apkPaths.get(i);
             Logger.debug("[%d/%d] Processing: %s", i + 1, apkPaths.size(), apkPath);
             
             AutomatedAttackResult result = executeAutomatedAttack(apkPath, tplPath, tplName, maxIterations);
-            results.add(result);
             
-            if (result.isAttackSuccess()) {
-                batchResult.incrementSuccessCount();
-            } else {
-                batchResult.incrementFailureCount();
-            }
+            // 使用addResult方法，它会根据原始检测状态自动决定是否计入统计
+            // addResult方法会自动将result添加到results列表中
+            batchResult.addResult(result);
         }
         
-        batchResult.setResults(results);
+        // calculateSuccessRate会在addResult中自动调用，但为了确保，这里再调用一次
         batchResult.calculateSuccessRate();
         
         return batchResult;
@@ -410,21 +405,21 @@ public class AutomatedAttackEngine {
         }
         
         // 收集结果
-        List<AutomatedAttackResult> results = new ArrayList<>();
         for (int i = 0; i < futures.size(); i++) {
             try {
                 AutomatedAttackResult result = futures.get(i).get();
-                results.add(result);
                 
-                if (result.isAttackSuccess()) {
-                    batchResult.incrementSuccessCount();
-                } else {
-                    batchResult.incrementFailureCount();
-                }
+                // 使用addResult方法，它会根据原始检测状态自动决定是否计入统计
+                // addResult方法会自动将result添加到results列表中
+                batchResult.addResult(result);
                 // 详细结果已在executeAutomatedAttackInternal中输出，这里不重复输出
             } catch (Exception e) {
                 Logger.error("Error getting result for APK %d: %s", i + 1, e.getMessage());
-                batchResult.incrementFailureCount();
+                // 创建失败结果对象
+                AutomatedAttackResult failedResult = new AutomatedAttackResult();
+                failedResult.setAttackSuccess(false);
+                failedResult.setMessage("Error: " + e.getMessage());
+                batchResult.addResult(failedResult);
             }
         }
         
@@ -439,7 +434,7 @@ public class AutomatedAttackEngine {
             Thread.currentThread().interrupt();
         }
         
-        batchResult.setResults(results);
+        // calculateSuccessRate会在addResult中自动调用，但为了确保，这里再调用一次
         batchResult.calculateSuccessRate();
         
         return batchResult;
@@ -672,9 +667,10 @@ public class AutomatedAttackEngine {
             // 输出统计信息（DEBUG级别）
             Logger.debug("\n=== GroundTruth Batch Attack Statistics ===");
             Logger.debug("Total attacks: %d", batchResult.getTotalAttacks());
+            Logger.debug("Detectable by detector (denominator): %d", batchResult.getDetectableCount());
             Logger.debug("Successful: %d", batchResult.getSuccessCount());
             Logger.debug("Failed: %d", batchResult.getFailureCount());
-            Logger.debug("Success rate: %.2f%%", batchResult.getSuccessRate() * 100);
+            Logger.debug("Success rate: %.2f%% (successful/detectable)", batchResult.getSuccessRate() * 100);
             Logger.debug("Average perturbations for successful attacks: %.2f", 
                 batchResult.getAvgSuccessPerturbations());
             Logger.debug("Average time for successful attacks: %.2f ms", 

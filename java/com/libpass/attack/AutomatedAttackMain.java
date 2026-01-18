@@ -393,9 +393,10 @@ public class AutomatedAttackMain {
         // 输出详细统计信息
         Logger.info("\n=== Summary Statistics ===");
         Logger.info("Total attacks (APK-TPL pairs): %d", batchResult.getTotalAttacks());
-        Logger.info("Successful attacks: %d", batchResult.getSuccessCount());
+        Logger.info("Detectable by detector (denominator): %d", batchResult.getDetectableCount());
+        Logger.info("Successful attacks (numerator): %d", batchResult.getSuccessCount());
         Logger.info("Failed attacks: %d", batchResult.getFailureCount());
-        Logger.info("Success rate: %.2f%%", batchResult.getSuccessRate() * 100);
+        Logger.info("Success rate: %.2f%% (successful/detectable)", batchResult.getSuccessRate() * 100);
         Logger.info("Average perturbations for successful attacks: %.2f", 
             batchResult.getAvgSuccessPerturbations());
         Logger.info("Average time for successful attacks: %.2f ms (%.2f seconds)", 
