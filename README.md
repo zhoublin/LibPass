@@ -185,8 +185,8 @@ java -cp build/libs/src-1.0.0.jar \
 
 **GroundTruth File Format:**
 ```
-apk1.apk:library1.jar,library2.jar
-apk2.apk:library3.jar
+apk1.apk:library1,library2
+apk2.apk:library3
 ...
 ```
 
@@ -216,25 +216,57 @@ apk2.apk:library3.jar
 
 ```
 src/
-├── java/                          # Java source code
+├── java/                                    # Java source code
 │   └── com/libpass/attack/
-│       ├── attack/                # Core attack engine
-│       │   ├── LibPassAttackEngine.java
-│       │   └── FireflyAlgorithm.java
-│       ├── automation/            # Automated attack orchestration
-│       │   ├── AutomatedAttackEngine.java
-│       │   └── AutomatedAttackMain.java
-│       ├── detector/              # TPL detector adapters
-│       │   ├── LibScanDetector.java
-│       │   ├── LibLoomDetector.java
-│       │   ├── LibPeckerDetector.java
-│       │   ├── LibHunterDetector.java
-│       │   └── LiteRadarDetector.java
-│       ├── perturbation/          # Perturbation operations
-│       │   ├── AddingPerturbation.java
-│       │   └── MergingPerturbation.java
-│       └── util/                  # Utilities
-│           └── Logger.java
+│       ├── attack/                          # Core attack engine and configuration
+│       │   ├── LibPassAttackEngine.java     
+│       │   ├── AttackMode.java              
+│       │   ├── AttackLevel.java             
+│       │   └── AttackResult.java            
+│       ├── automation/                      # Automated attack orchestration and batch processing
+│       │   ├── AutomatedAttackEngine.java   
+│       │   ├── AutomatedAttackMain.java     
+│       │   ├── AutomatedAttackResult.java   
+│       │   ├── BatchAttackResult.java       
+│       │   ├── GroundTruthBatchAttackResult.java  
+│       │   └── AttackStatistics.java        
+│       ├── detector/                        # TPL detector adapters and interfaces
+│       │   ├── TPLDetector.java             
+│       │   ├── DetectionResult.java         
+│       │   ├── LibScanDetector.java         
+│       │   ├── LibLoomDetector.java         
+│       │   ├── LibPeckerDetector.java       
+│       │   ├── LibHunterDetector.java       
+│       │   └── LiteRadarDetector.java       
+│       ├── perturbation/                    # Perturbation operations and application
+│       │   ├── AddingPerturbation.java      
+│       │   ├── MergingPerturbation.java     
+│       │   ├── PerturbationApplier.java     
+│       │   ├── ModificationLogger.java      
+│       │   └── CallSiteUpdater.java         
+│       ├── apk/                             # APK processing utilities
+│       │   ├── APKRepackager.java           
+│       │   └── APKSigner.java               
+│       ├── graph/                           # Graph structures for dependency analysis
+│       │   ├── HeterogeneousGraph.java      
+│       │   ├── GraphNode.java               
+│       │   └── GraphBuilder.java            
+│       ├── firefly/                         # Firefly algorithm for optimization
+│       │   ├── FireflyAlgorithm.java        
+│       │   ├── Firefly.java                 
+│       │   └── KDTree.java                  
+│       ├── entropy/                         # Entropy calculation for code metrics
+│       │   └── GraphEntropyCalculator.java  
+│       ├── decoupling/                      # TPL decoupling utilities
+│       │   └── TPLDecoupler.java            
+│       ├── util/                            # Utility classes
+│       │   └── Logger.java                  
+│       ├── AttackStrategy.java              # Attack strategy interface
+│       ├── AttackConfig.java                # Attack configuration
+│       ├── AttackResult.java                # Attack result (legacy)
+│       ├── APKModifier.java                 # APK modification utilities
+│       ├── LibPassAttackMain.java           # Main entry point for LibPass attack
+│       └── AutomatedAttackMain.java         # Main entry point for automated attacks (command line)
 ├── TPL_Detectors/                 # Third-party detection tools
 │   ├── LibScan/                   # LibScan tool
 │   ├── LIBLOOM/                   # LibLoom tool
@@ -246,30 +278,13 @@ src/
 │   └── evaluator.py
 ├── build.gradle                   # Build configuration
 ├── requirements.txt               # Python dependencies
-└── README.md                      # This file
+├── validate_apk.sh                # End-to-end APK functionality validation
+├── sign_apk.sh                    # APK signing tool
+├── LICENSE
+└── README.md                      
 ```
 
-## 🔧 Configuration
 
-### Logging
-
-Configure log levels via command-line, system property, or environment variable:
-
-```bash
-# Command-line
-java -cp ... AutomatedAttackMain ... INFO
-
-# System property
-java -Dlibpass.log.level=DEBUG -cp ... AutomatedAttackMain ...
-
-# Environment variable
-export LIBPASS_LOG_LEVEL=DEBUG
-java -cp ... AutomatedAttackMain ...
-```
-
-### Detector Configuration
-
-Each detector requires specific configuration. See detector-specific README files in `TPL_Detectors/` for details.
 
 ## 📊 Results
 
@@ -284,39 +299,6 @@ Task #1: SUCCESS - final_confidence=0.000000, perturbations=5, time=12000 ms, ty
 Task #2: FAILED - final_confidence=0.850000, perturbations=100, time=45000 ms
 ```
 
-## 🧪 Evaluation
-
-Use the evaluation script to analyze attack results:
-
-```bash
-python python/evaluator.py \
-    output/attack_results.json \
-    --print \
-    --output evaluation_report.json
-```
-
-## 🔬 Technical Details
-
-### Graph Entropy
-
-LibPass uses two types of entropy to guide attacks:
-
-1. **Dependency Entropy (H_d)**: Based on 5 dependency types (parameter, return, field, call, reference)
-2. **Structural Entropy (H_s)**: Based on local neighborhood randomness
-
-**Total Entropy**: `H(G) = (1/N) * Σ(μ*H_s + (1-μ)*H_d)`
-
-### Perturbation Types
-
-- **Add Operations**: Add packages, classes, methods, fields, parameters
-- **Merge Operations**: Merge nodes of the same type, handling conflicts
-
-### Firefly Algorithm
-
-- 7-dimensional vector representation for perturbation decisions
-- KDTree spatial indexing for O(log n) neighbor queries
-- Adaptive parameter adjustment
-- Multi-source direction guidance
 
 ## ⚠️ Important Notice
 
@@ -326,43 +308,3 @@ LibPass uses two types of entropy to guide attacks:
 - Comply with applicable laws and regulations
 - Follow ethical guidelines for security research
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
-
-### Adding New Detectors
-
-1. Implement the `TPLDetector` interface
-2. Register in `AutomatedAttackMain.createDetector()`
-3. Add configuration support
-
-### Adding New Perturbation Strategies
-
-1. Extend `Perturbation` base class
-2. Implement perturbation logic
-3. Register in `PerturbationApplier`
-
-## 📝 License
-
-This project is licensed for academic research purposes. See the LICENSE file for details.
-
-## 📧 Contact
-
-For questions or issues, please open an issue on GitHub or contact the authors.
-
-## 🙏 Acknowledgments
-
-- **Soot Framework**: For Java bytecode analysis and transformation
-- **TPL Detection Tools**: LibScan, LibLoom, LibPecker, LibHunter, and LiteRadar
-- **Research Community**: For feedback and contributions
-
-## 📚 Related Work
-
-- Third-party library detection tools
-- Adversarial attacks on Android applications
-- Graph-based program analysis
-- Entropy-guided optimization
-
----
-
-**Note**: This is the official implementation of the LibPass paper accepted to TDSC 2025. For questions about the paper or implementation, please refer to the paper or open an issue.
