@@ -265,7 +265,6 @@ src/
 │       ├── AttackConfig.java                # Attack configuration
 │       ├── AttackResult.java                # Attack result (legacy)
 │       ├── APKModifier.java                 # APK modification utilities
-│       ├── LibPassAttackMain.java           # Main entry point for LibPass attack
 │       └── AutomatedAttackMain.java         # Main entry point for automated attacks (command line)
 ├── TPL_Detectors/                 # Third-party detection tools
 │   ├── LibScan/                   # LibScan tool
